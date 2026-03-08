@@ -8,6 +8,6 @@ import {BrowserRouter} from 'react-router-dom'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter basename='fractal'><App /></BrowserRouter>
+    <BrowserRouter basename='/fractal'><App /></BrowserRouter>
   </React.StrictMode>,
 )
