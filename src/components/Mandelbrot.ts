@@ -7,12 +7,15 @@ export default class Mandelbrot {
     this.width = width;
     this.height = height;
   }
-  getPixel(px: number, py: number) {
+  getPixel(
+    px: number,
+    py: number,
+    view: { zoom: number; offsetX: number; offsetY: number }
+  ) {
     let iterations = 0;
-    const zoom = 1;
     const C = new Complex(
-      px / (0.4 * zoom * this.width) - 2,
-      py / (0.4 * zoom * this.width) - 0.8
+      (px - this.width / 2) / view.zoom + view.offsetX,
+      (py - this.height / 2) / view.zoom + view.offsetY
     );
     const Z = new Complex(0, 0);
 
@@ -20,6 +23,6 @@ export default class Mandelbrot {
       Z.square().add(C);
       ++iterations;
     }
-    return `rgb(${iterations},${iterations},${iterations})`;
+    return [iterations, iterations, iterations, 255];
   }
 }
