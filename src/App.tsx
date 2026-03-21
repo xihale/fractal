@@ -7,47 +7,47 @@ function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
-  const [dimensions, setDimensions] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const dimensionsRef = useRef({ width: window.innerWidth, height: window.innerHeight });
+  const [dimensions, setDimensions] = useState(dimensionsRef.current);
   
   const [useMandelbrot, setUseMandelbrot] = useState(false);
+  const useMandelbrotRef = useRef(useMandelbrot);
   
   const defaultZoom = Math.min(window.innerWidth / 4, window.innerHeight / 3);
-  const [view, setView] = useState({
+  const viewRef = useRef({
     zoom: defaultZoom,
-    offsetX: 0, // Julia default
+    offsetX: 0, 
     offsetY: 0
   });
 
-  const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
   const isInteracting = useRef(false);
   const debounceTimer = useRef<number | null>(null);
+  const renderFrameRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    const handleResize = () => {
-      setDimensions({ width: window.innerWidth, height: window.innerHeight });
-    };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  const computeFractal = useCallback(() => {
+  const computeFractal = useCallback((isLowRes: boolean = false, overrideMandelbrot?: boolean) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) return;
 
-    const { width, height } = dimensions;
+    const { width, height } = dimensionsRef.current;
+    const view = viewRef.current;
 
+    const isMandelbrot = overrideMandelbrot ?? useMandelbrotRef.current;
     const mandelbrot = new Mandelbrot(width, height);
     const julia = new Julia(width, height);
-    const pix = useMandelbrot ? mandelbrot : julia;
+    const pix = isMandelbrot ? mandelbrot : julia;
 
-    const imgData = ctx.createImageData(width, height);
+    const step = isLowRes ? 8 : 1;
+    const rw = Math.ceil(width / step);
+    const rh = Math.ceil(height / step);
+
+    const imgData = new ImageData(rw, rh);
     const data = imgData.data;
 
     let offset = 0;
-    for (let j = 0; j < height; j++) {
-      for (let i = 0; i < width; i++) {
+    for (let j = 0; j < height; j += step) {
+      for (let i = 0; i < width; i += step) {
         const [r, g, b, a] = pix.getPixel(i, j, view);
         data[offset++] = r;
         data[offset++] = g;
@@ -55,58 +55,82 @@ function App() {
         data[offset++] = a;
       }
     }
-    ctx.putImageData(imgData, 0, 0);
-  }, [dimensions, useMandelbrot, view]);
+
+    if (step === 1) {
+      ctx.putImageData(imgData, 0, 0);
+    } else {
+      const offscreen = document.createElement("canvas");
+      offscreen.width = rw;
+      offscreen.height = rh;
+      const offCtx = offscreen.getContext("2d", { alpha: false });
+      if (offCtx) {
+        offCtx.putImageData(imgData, 0, 0);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(offscreen, 0, 0, rw, rh, 0, 0, rw * step, rh * step);
+      }
+    }
+  }, []);
 
   useEffect(() => {
-    if (transform.scale === 1 && transform.x === 0 && transform.y === 0) {
-      // Small timeout to allow the browser to paint reset transforms if we're unfreezing
-      const timer = setTimeout(() => computeFractal(), 0);
-      return () => clearTimeout(timer);
-    }
-  }, [computeFractal, transform]);
-
-  const commitTransform = useCallback((currentTransform: {x: number, y: number, scale: number}) => {
-    setView(prevView => {
-      const { width, height } = dimensions;
-      const canvasX = (width / 2 - currentTransform.x) / currentTransform.scale;
-      const canvasY = (height / 2 - currentTransform.y) / currentTransform.scale;
-      
-      const newOffsetX = (canvasX - width / 2) / prevView.zoom + prevView.offsetX;
-      const newOffsetY = (canvasY - height / 2) / prevView.zoom + prevView.offsetY;
-      
-      return {
-        zoom: prevView.zoom * currentTransform.scale,
-        offsetX: newOffsetX,
-        offsetY: newOffsetY
-      };
-    });
-    setTransform({ x: 0, y: 0, scale: 1 });
-    isInteracting.current = false;
-  }, [dimensions]);
-
-  useEffect(() => {
-    if (isInteracting.current) {
-      if (debounceTimer.current !== null) clearTimeout(debounceTimer.current);
-      debounceTimer.current = window.setTimeout(() => {
-        commitTransform(transform);
-      }, 200);
-    }
-  }, [transform, commitTransform]);
-
-  const handleWheel = (e: React.WheelEvent) => {
-    isInteracting.current = true;
-    const zoomFactor = Math.pow(0.99, e.deltaY);
+    const handleResize = () => {
+      const nextDim = { width: window.innerWidth, height: window.innerHeight };
+      dimensionsRef.current = nextDim;
+      setDimensions(nextDim);
+      computeFractal(false);
+    };
+    window.addEventListener('resize', handleResize);
     
-    setTransform(prev => {
-      const newScale = prev.scale * zoomFactor;
-      const cx = e.clientX;
-      const cy = e.clientY;
-      const newX = cx - (cx - prev.x) * zoomFactor;
-      const newY = cy - (cy - prev.y) * zoomFactor;
-      return { scale: newScale, x: newX, y: newY };
-    });
-  };
+    // Initial render
+    computeFractal(false);
+    return () => window.removeEventListener('resize', handleResize);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const triggerLowResRender = useCallback(() => {
+    if (!renderFrameRef.current) {
+      renderFrameRef.current = requestAnimationFrame(() => {
+        computeFractal(true);
+        renderFrameRef.current = null;
+      });
+    }
+    
+    if (debounceTimer.current !== null) clearTimeout(debounceTimer.current);
+    debounceTimer.current = window.setTimeout(() => {
+      computeFractal(false);
+      isInteracting.current = false;
+    }, 150);
+  }, [computeFractal]);
+
+  const handleWheel = useCallback((e: WheelEvent) => {
+    e.preventDefault();
+    isInteracting.current = true;
+    
+    // deltaY is usually 100 for wheel ticks.
+    // 0.995^100 ≈ 0.6. This is a good zoom rate.
+    const zoomFactor = Math.pow(0.995, e.deltaY);
+    const view = viewRef.current;
+    const { width, height } = dimensionsRef.current;
+    
+    const cx = (e.clientX - width / 2) / view.zoom + view.offsetX;
+    const cy = (e.clientY - height / 2) / view.zoom + view.offsetY;
+    
+    const newZoom = view.zoom * zoomFactor;
+    
+    const newOffsetX = cx - (e.clientX - width / 2) / newZoom;
+    const newOffsetY = cy - (e.clientY - height / 2) / newZoom;
+    
+    viewRef.current = { zoom: newZoom, offsetX: newOffsetX, offsetY: newOffsetY };
+    
+    triggerLowResRender();
+  }, [triggerLowResRender]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (container) {
+      container.addEventListener('wheel', handleWheel, { passive: false });
+      return () => container.removeEventListener('wheel', handleWheel);
+    }
+  }, [handleWheel]);
 
   const [isDragging, setIsDragging] = useState(false);
   const lastPointer = useRef({ x: 0, y: 0 });
@@ -120,15 +144,19 @@ function App() {
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!isDragging) return;
     isInteracting.current = true;
+    
     const dx = e.clientX - lastPointer.current.x;
     const dy = e.clientY - lastPointer.current.y;
     lastPointer.current = { x: e.clientX, y: e.clientY };
 
-    setTransform(prev => ({
-      ...prev,
-      x: prev.x + dx,
-      y: prev.y + dy
-    }));
+    const view = viewRef.current;
+    viewRef.current = {
+      ...view,
+      offsetX: view.offsetX - dx / view.zoom,
+      offsetY: view.offsetY - dy / view.zoom
+    };
+    
+    triggerLowResRender();
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
@@ -140,7 +168,6 @@ function App() {
     <div 
       ref={containerRef}
       style={{ width: '100vw', height: '100vh', overflow: 'hidden', backgroundColor: '#000', position: 'relative', touchAction: 'none' }}
-      onWheel={handleWheel}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -150,9 +177,9 @@ function App() {
         <button 
           onClick={() => {
             setUseMandelbrot(false);
-            setView({ zoom: defaultZoom, offsetX: 0, offsetY: 0 });
-            setTransform({ x: 0, y: 0, scale: 1 });
-            isInteracting.current = false;
+            useMandelbrotRef.current = false;
+            viewRef.current = { zoom: Math.min(window.innerWidth / 4, window.innerHeight / 3), offsetX: 0, offsetY: 0 };
+            computeFractal(false, false);
           }} 
           style={{ padding: '8px 16px', background: !useMandelbrot ? '#007bff' : '#333', color: '#fff', border: 'none', cursor: 'pointer', borderRadius: 4 }}
         >
@@ -161,9 +188,9 @@ function App() {
         <button 
           onClick={() => {
             setUseMandelbrot(true);
-            setView({ zoom: defaultZoom, offsetX: -0.5, offsetY: 0 });
-            setTransform({ x: 0, y: 0, scale: 1 });
-            isInteracting.current = false;
+            useMandelbrotRef.current = true;
+            viewRef.current = { zoom: Math.min(window.innerWidth / 4, window.innerHeight / 3), offsetX: -0.5, offsetY: 0 };
+            computeFractal(false, true);
           }} 
           style={{ padding: '8px 16px', background: useMandelbrot ? '#007bff' : '#333', color: '#fff', border: 'none', cursor: 'pointer', borderRadius: 4 }}
         >
@@ -176,8 +203,6 @@ function App() {
         width={dimensions.width} 
         height={dimensions.height}
         style={{
-          transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
-          transformOrigin: '0 0',
           cursor: isDragging ? 'grabbing' : 'grab'
         }}
       >
