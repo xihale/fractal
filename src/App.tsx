@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-
-import Mandelbrot from "./components/Mandelbrot";
-import Julia from "./components/Julia";
+import { RendererFactory } from "./renderers/RendererFactory";
+import { IFractalRenderer, ViewState } from "./renderers/RendererType";
 
 function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rendererRef = useRef<IFractalRenderer | null>(null);
   
   const dimensionsRef = useRef({ width: window.innerWidth, height: window.innerHeight });
   const [dimensions, setDimensions] = useState(dimensionsRef.current);
@@ -14,61 +14,44 @@ function App() {
   const useMandelbrotRef = useRef(useMandelbrot);
   
   const defaultZoom = Math.min(window.innerWidth / 4, window.innerHeight / 3);
-  const viewRef = useRef({
+  const viewRef = useRef<ViewState>({
     zoom: defaultZoom,
     offsetX: 0, 
     offsetY: 0
   });
 
   const isInteracting = useRef(false);
-  const debounceTimer = useRef<number | null>(null);
   const renderFrameRef = useRef<number | null>(null);
 
-  const computeFractal = useCallback((isLowRes: boolean = false, overrideMandelbrot?: boolean) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d", { alpha: false });
-    if (!ctx) return;
-
-    const { width, height } = dimensionsRef.current;
+  const triggerRender = useCallback(async (isLowRes: boolean = false) => {
+    if (!rendererRef.current) return;
     const view = viewRef.current;
+    const isMandel = useMandelbrotRef.current;
+    
+    await rendererRef.current.render(view, isMandel, isLowRes);
+  }, []);
 
-    const isMandelbrot = overrideMandelbrot ?? useMandelbrotRef.current;
-    const mandelbrot = new Mandelbrot(width, height);
-    const julia = new Julia(width, height);
-    const pix = isMandelbrot ? mandelbrot : julia;
-
-    const step = isLowRes ? 8 : 1;
-    const rw = Math.ceil(width / step);
-    const rh = Math.ceil(height / step);
-
-    const imgData = new ImageData(rw, rh);
-    const data = imgData.data;
-
-    let offset = 0;
-    for (let j = 0; j < height; j += step) {
-      for (let i = 0; i < width; i += step) {
-        const [r, g, b, a] = pix.getPixel(i, j, view);
-        data[offset++] = r;
-        data[offset++] = g;
-        data[offset++] = b;
-        data[offset++] = a;
+  useEffect(() => {
+    let active = true;
+    const init = async () => {
+      if (!canvasRef.current) return;
+      const renderer = await RendererFactory.createRenderer(canvasRef.current);
+      if (active) {
+        rendererRef.current = renderer;
+        triggerRender();
+      } else {
+        renderer.destroy();
       }
-    }
-
-    if (step === 1) {
-      ctx.putImageData(imgData, 0, 0);
-    } else {
-      const offscreen = document.createElement("canvas");
-      offscreen.width = rw;
-      offscreen.height = rh;
-      const offCtx = offscreen.getContext("2d", { alpha: false });
-      if (offCtx) {
-        offCtx.putImageData(imgData, 0, 0);
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(offscreen, 0, 0, rw, rh, 0, 0, rw * step, rh * step);
+    };
+    init();
+    
+    return () => {
+      active = false;
+      if (rendererRef.current) {
+        rendererRef.current.destroy();
+        rendererRef.current = null;
       }
-    }
+    };
   }, []);
 
   useEffect(() => {
@@ -76,37 +59,21 @@ function App() {
       const nextDim = { width: window.innerWidth, height: window.innerHeight };
       dimensionsRef.current = nextDim;
       setDimensions(nextDim);
-      computeFractal(false);
+      
+      requestAnimationFrame(() => {
+        if (rendererRef.current) triggerRender();
+      });
     };
     window.addEventListener('resize', handleResize);
-    
-    // Initial render
-    computeFractal(false);
     return () => window.removeEventListener('resize', handleResize);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [triggerRender]);
 
-  const triggerLowResRender = useCallback(() => {
-    if (!renderFrameRef.current) {
-      renderFrameRef.current = requestAnimationFrame(() => {
-        computeFractal(true);
-        renderFrameRef.current = null;
-      });
-    }
-    
-    if (debounceTimer.current !== null) clearTimeout(debounceTimer.current);
-    debounceTimer.current = window.setTimeout(() => {
-      computeFractal(false);
-      isInteracting.current = false;
-    }, 150);
-  }, [computeFractal]);
+  const debounceTimer = useRef<number | null>(null);
 
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
     isInteracting.current = true;
     
-    // deltaY is usually 100 for wheel ticks.
-    // 0.995^100 ≈ 0.6. This is a good zoom rate.
     const zoomFactor = Math.pow(0.995, e.deltaY);
     const view = viewRef.current;
     const { width, height } = dimensionsRef.current;
@@ -114,15 +81,30 @@ function App() {
     const cx = (e.clientX - width / 2) / view.zoom + view.offsetX;
     const cy = (e.clientY - height / 2) / view.zoom + view.offsetY;
     
-    const newZoom = view.zoom * zoomFactor;
+    // JS Number precision breaks down past ~1e14, so we clamp zoom to 1e13.
+    const MAX_ZOOM = 1e13;
+    const MIN_ZOOM = 10;
+    let newZoom = view.zoom * zoomFactor;
+    newZoom = Math.min(Math.max(newZoom, MIN_ZOOM), MAX_ZOOM);
     
     const newOffsetX = cx - (e.clientX - width / 2) / newZoom;
     const newOffsetY = cy - (e.clientY - height / 2) / newZoom;
     
     viewRef.current = { zoom: newZoom, offsetX: newOffsetX, offsetY: newOffsetY };
     
-    triggerLowResRender();
-  }, [triggerLowResRender]);
+    if (!renderFrameRef.current) {
+      renderFrameRef.current = requestAnimationFrame(() => {
+        triggerRender(true);
+        renderFrameRef.current = null;
+      });
+    }
+
+    if (debounceTimer.current !== null) clearTimeout(debounceTimer.current);
+    debounceTimer.current = window.setTimeout(() => {
+      triggerRender(false);
+      isInteracting.current = false;
+    }, 500); // 适中延迟，避免卡顿感同时足够敏捷
+  }, [triggerRender]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -156,12 +138,24 @@ function App() {
       offsetY: view.offsetY - dy / view.zoom
     };
     
-    triggerLowResRender();
+    if (!renderFrameRef.current) {
+      renderFrameRef.current = requestAnimationFrame(() => {
+        triggerRender(true);
+        renderFrameRef.current = null;
+      });
+    }
+
+    if (debounceTimer.current !== null) clearTimeout(debounceTimer.current);
+    debounceTimer.current = window.setTimeout(() => {
+      triggerRender(false);
+      isInteracting.current = false;
+    }, 300); // 移动停止后 300ms 刷新
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
     setIsDragging(false);
     (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    triggerRender(false); 
   };
 
   return (
@@ -179,7 +173,7 @@ function App() {
             setUseMandelbrot(false);
             useMandelbrotRef.current = false;
             viewRef.current = { zoom: Math.min(window.innerWidth / 4, window.innerHeight / 3), offsetX: 0, offsetY: 0 };
-            computeFractal(false, false);
+            triggerRender(false);
           }} 
           style={{ padding: '8px 16px', background: !useMandelbrot ? '#007bff' : '#333', color: '#fff', border: 'none', cursor: 'pointer', borderRadius: 4 }}
         >
@@ -190,7 +184,7 @@ function App() {
             setUseMandelbrot(true);
             useMandelbrotRef.current = true;
             viewRef.current = { zoom: Math.min(window.innerWidth / 4, window.innerHeight / 3), offsetX: -0.5, offsetY: 0 };
-            computeFractal(false, true);
+            triggerRender(false);
           }} 
           style={{ padding: '8px 16px', background: useMandelbrot ? '#007bff' : '#333', color: '#fff', border: 'none', cursor: 'pointer', borderRadius: 4 }}
         >

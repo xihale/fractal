@@ -1,5 +1,3 @@
-import Complex from "./Complex";
-
 export default class Mandelbrot {
   width: number;
   height: number;
@@ -13,14 +11,16 @@ export default class Mandelbrot {
     view: { zoom: number; offsetX: number; offsetY: number }
   ) {
     let iterations = 0;
-    const C = new Complex(
-      (px - this.width / 2) / view.zoom + view.offsetX,
-      (py - this.height / 2) / view.zoom + view.offsetY
-    );
-    const Z = new Complex(0, 0);
+    const cx = (px - this.width / 2) / view.zoom + view.offsetX;
+    const cy = (py - this.height / 2) / view.zoom + view.offsetY;
+    let zx = 0;
+    let zy = 0;
+    const maxIterations = 300;
 
-    while (Z.distanse2() < 4 && iterations < 300) {
-      Z.square().add(C);
+    while (zx * zx + zy * zy < 4 && iterations < maxIterations) {
+      const tempX = zx * zx - zy * zy + cx;
+      zy = 2 * zx * zy + cy;
+      zx = tempX;
       ++iterations;
     }
     return [iterations, iterations, iterations, 255];
