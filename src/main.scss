@@ -1,3 +1,90 @@
-body{
+:root {
+  color-scheme: dark;
+  --mode-bg: rgba(16, 22, 30, 0.72);
+  --mode-fg: #d7e2ea;
+  --mode-active: #12707f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
   margin: 0;
+  background: #000;
+  color: var(--mode-fg);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Stops pull-to-refresh and rubber-band scrolling from fighting the canvas. */
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fractal {
+  position: fixed;
+  inset: 0;
+  /* dvh tracks the collapsing mobile browser bar; vh is the fallback. */
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background: #000;
+  /* The canvas owns every gesture: no scrolling, no browser pinch-zoom. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  cursor: grab;
+}
+
+.fractal__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* Width/height attributes are the backing store; CSS keeps it viewport-sized. */
+}
+
+.fractal__modes {
+  position: absolute;
+  z-index: 10;
+  /* Respect safe areas so the controls stay tappable on notched phones. */
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  left: calc(env(safe-area-inset-left, 0px) + 10px);
+  display: flex;
+  gap: 8px;
+  padding: 4px;
+  border: 1px solid rgba(215, 226, 234, 0.14);
+  border-radius: 999px;
+  background: var(--mode-bg);
+  backdrop-filter: blur(8px);
+}
+
+.fractal__mode {
+  min-width: 44px;
+  /* 44px is the minimum comfortable touch target. */
+  min-height: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--mode-fg);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.fractal__mode[aria-pressed="true"] {
+  background: var(--mode-active);
+  color: #fff;
+}
+
+.fractal__mode:focus-visible {
+  outline: 2px solid #5fc9b0;
+  outline-offset: 2px;
 }

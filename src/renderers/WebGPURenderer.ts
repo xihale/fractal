@@ -93,6 +93,9 @@ fn fs_julia(in: VertexOutput) -> @location(0) vec4<f32> {
 `;
 
 export class WebGPURenderer implements IFractalRenderer {
+  /** f32 shaders lose precision long before the pixel count matters. */
+  readonly maxPixelRatio = 2;
+
   private canvas: HTMLCanvasElement;
   private device: GPUDevice;
   private context: GPUCanvasContext;

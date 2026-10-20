@@ -1,11 +1,25 @@
-import { IFractalRenderer, ViewState } from './RendererType';
+import { IFractalRenderer, RenderOptions, RenderQuality, ViewState, WorkerRenderRequest } from './RendererType';
+
+/** Sampling stride per quality tier, measured in CSS pixels. */
+const QUALITY_STEP: Record<RenderQuality, number> = { preview: 4, full: 1 };
+
+interface WorkerResponse {
+  id: number;
+  buffer: ArrayBuffer;
+  width: number;
+  height: number;
+}
 
 export class WorkerRenderer implements IFractalRenderer {
+  /** The JS renderer is CPU bound, so extra backing-store pixels only cost time. */
+  readonly maxPixelRatio = 1;
+
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private worker: Worker;
   private currentId = 0;
-  private pendingResolves: Map<number, () => void> = new Map();
+  /** Reused canvas for scaling coarse passes up to the backing store. */
+  private scratch: HTMLCanvasElement | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -17,55 +31,49 @@ export class WorkerRenderer implements IFractalRenderer {
     this.worker.onmessage = this.handleMessage.bind(this);
   }
 
-  private handleMessage(e: MessageEvent) {
+  private handleMessage(e: MessageEvent<WorkerResponse>) {
     const { id, buffer, width, height } = e.data;
-    const resolve = this.pendingResolves.get(id);
-    if (resolve) {
-      if (width > 0 && height > 0) {
-        const imgData = new ImageData(buffer, width, height);
-        
-        if (width === this.canvas.width && height === this.canvas.height) {
-          this.ctx.putImageData(imgData, 0, 0);
-        } else {
-          // Low-res pass step
-          const offscreen = document.createElement("canvas");
-          offscreen.width = width;
-          offscreen.height = height;
-          const offCtx = offscreen.getContext("2d", { alpha: false });
-          if (offCtx) {
-            offCtx.putImageData(imgData, 0, 0);
-            this.ctx.imageSmoothingEnabled = false;
-            this.ctx.drawImage(offscreen, 0, 0, width, height, 0, 0, this.canvas.width, this.canvas.height);
-          }
-        }
-      }
-      resolve();
-      this.pendingResolves.delete(id);
+    // Superseded render; the worker already aborted it.
+    if (id !== this.currentId || width <= 0 || height <= 0) return;
+
+    const imgData = new ImageData(new Uint8ClampedArray(buffer), width, height);
+
+    if (width === this.canvas.width && height === this.canvas.height) {
+      this.ctx.putImageData(imgData, 0, 0);
+      return;
     }
+
+    this.scratch ??= document.createElement("canvas");
+    const offscreen = this.scratch;
+    if (offscreen.width !== width || offscreen.height !== height) {
+      offscreen.width = width;
+      offscreen.height = height;
+    }
+    offscreen.getContext("2d", { alpha: false })!.putImageData(imgData, 0, 0);
+    // Smooth upscaling hides the coarse grid while the user moves.
+    this.ctx.imageSmoothingEnabled = true;
+    this.ctx.drawImage(offscreen, 0, 0, width, height, 0, 0, this.canvas.width, this.canvas.height);
   }
 
-  render(view: ViewState, isMandelbrot: boolean, isLowRes: boolean = false): Promise<void> {
-    // Resolve and clear previous pending renders to prevent memory leaks
-    this.pendingResolves.forEach(resolve => resolve());
-    this.pendingResolves.clear();
+  render(view: ViewState, isMandelbrot: boolean, options: RenderOptions = {}): void {
+    const width = options.cssWidth ?? this.canvas.clientWidth;
+    const height = options.cssHeight ?? this.canvas.clientHeight;
+    if (width <= 0 || height <= 0) return;
 
-    return new Promise((resolve) => {
-      const id = ++this.currentId;
-      this.pendingResolves.set(id, resolve);
-      const step = isLowRes ? 8 : 1;
-      
-      this.worker.postMessage({
-        id,
-        view,
-        width: this.canvas.width,
-        height: this.canvas.height,
-        isMandelbrot,
-        step
-      });
-    });
+    const id = ++this.currentId;
+    const request: WorkerRenderRequest = {
+      id,
+      view,
+      width,
+      height,
+      step: QUALITY_STEP[options.quality ?? 'full'],
+      isMandelbrot,
+    };
+    this.worker.postMessage(request);
   }
 
   destroy() {
+    this.currentId++;
     this.worker.terminate();
   }
 }
