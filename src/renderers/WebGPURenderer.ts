@@ -1,4 +1,5 @@
 import { IFractalRenderer, ViewState } from './RendererType';
+import { MAX_ITERATIONS, PALETTE_WGSL } from './palette';
 
 const SHADER_CODE = `
 struct Uniforms {
@@ -28,6 +29,8 @@ fn vs_main(@builtin(vertex_index) VertexIndex: u32) -> VertexOutput {
   return output;
 }
 
+${PALETTE_WGSL}
+
 @fragment
 fn fs_mandelbrot(in: VertexOutput) -> @location(0) vec4<f32> {
     var coord = in.position.xy;
@@ -40,24 +43,22 @@ fn fs_mandelbrot(in: VertexOutput) -> @location(0) vec4<f32> {
     let cy: f32 = pos.y;
     
     var iterations: i32 = 0;
-    let maxIterations: i32 = 300;
+    let maxIterations: i32 = ${MAX_ITERATIONS};
     
     loop {
         if (iterations >= maxIterations) { break; }
-        if (zx * zx + zy * zy >= 4.0) { break; }
+        if (zx * zx + zy * zy >= 256.0) { break; }
         let tempX = zx * zx - zy * zy + cx;
         zy = 2.0 * zx * zy + cy;
         zx = tempX;
         iterations++;
     }
     
-    let t = f32(iterations);
-    return vec4<f32>(t / 255.0, t / 255.0, t / 255.0, 1.0);
-}
-
-fn hsl2rgb(c: vec3<f32>) -> vec3<f32> {
-    let rgb = clamp(abs(((c.x * 6.0 + vec3<f32>(0.0, 4.0, 2.0)) % 6.0) - 3.0) - 1.0, vec3<f32>(0.0), vec3<f32>(1.0));
-    return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
+    if (iterations >= maxIterations) {
+        return vec4<f32>(interior_color(), 1.0);
+    }
+    let smoothIterations = f32(iterations) + 1.0 - log2(0.5 * log2(zx * zx + zy * zy));
+    return vec4<f32>(palette_from_smooth(smoothIterations), 1.0);
 }
 
 @fragment
@@ -72,23 +73,22 @@ fn fs_julia(in: VertexOutput) -> @location(0) vec4<f32> {
     let cy: f32 = 0.01;
     
     var iterations: i32 = 0;
-    let maxIterations: i32 = 300;
+    let maxIterations: i32 = ${MAX_ITERATIONS};
     
     loop {
         if (iterations >= maxIterations) { break; }
-        if (zx * zx + zy * zy >= 4.0) { break; }
+        if (zx * zx + zy * zy >= 256.0) { break; }
         let tempX = zx * zx - zy * zy + cx;
         zy = 2.0 * zx * zy + cy;
         zx = tempX;
         iterations++;
     }
     
-    if (iterations == maxIterations) {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    } else {
-        let hue = f32(iterations) / f32(maxIterations) + (160.0 / 360.0);
-        return vec4<f32>(hsl2rgb(vec3<f32>(hue, 0.9, 0.6)), 1.0);
+    if (iterations >= maxIterations) {
+        return vec4<f32>(interior_color(), 1.0);
     }
+    let smoothIterations = f32(iterations) + 1.0 - log2(0.5 * log2(zx * zx + zy * zy));
+    return vec4<f32>(palette_from_smooth(smoothIterations), 1.0);
 }
 `;
 

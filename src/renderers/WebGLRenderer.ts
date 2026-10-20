@@ -1,4 +1,5 @@
 import { IFractalRenderer, ViewState } from './RendererType';
+import { MAX_ITERATIONS, PALETTE_GLSL } from './palette';
 
 const V_SHADER = `#version 300 es
 in vec2 a_position;
@@ -53,6 +54,7 @@ uniform int u_maxIterations;
 out vec4 outColor;
 
 ${COMMON_MATH}
+${PALETTE_GLSL}
 
 void main() {
     vec2 coord = gl_FragCoord.xy;
@@ -71,12 +73,14 @@ void main() {
     
     int iterations = 0;
     vec2 two = vec2(2.0, 0.0);
+    vec2 zx2 = vec2(0.0, 0.0);
+    vec2 zy2 = vec2(0.0, 0.0);
     
     for (int i = 0; i < u_maxIterations; ++i) {
-        vec2 zx2 = mul(zx, zx);
-        vec2 zy2 = mul(zy, zy);
+        zx2 = mul(zx, zx);
+        zy2 = mul(zy, zy);
         
-        if (add(zx2, zy2).x >= 4.0) break;
+        if (add(zx2, zy2).x >= 256.0) break;
         
         vec2 tempX = add(sub(zx2, zy2), cx);
         zy = add(mul(mul(two, zx), zy), cy);
@@ -84,8 +88,12 @@ void main() {
         iterations++;
     }
     
-    float t = float(iterations);
-    outColor = vec4(t / 255.0, t / 255.0, t / 255.0, 1.0);
+    if (iterations >= u_maxIterations) {
+        outColor = vec4(interiorColor(), 1.0);
+    } else {
+        float smoothIterations = float(iterations) + 1.0 - log2(0.5 * log2(add(zx2, zy2).x));
+        outColor = vec4(paletteFromSmooth(smoothIterations), 1.0);
+    }
 }`;
 
 const F_SHADER_JULIA_DS = `#version 300 es
@@ -100,11 +108,7 @@ uniform int u_maxIterations;
 out vec4 outColor;
 
 ${COMMON_MATH}
-
-vec3 hsl2rgb(vec3 c) {
-    vec3 rgb = clamp(abs(mod(c.x*6.0+vec3(0.0,4.0,2.0),6.0)-3.0)-1.0, 0.0, 1.0);
-    return c.z + c.y * (rgb-0.5)*(1.0-abs(2.0*c.z-1.0));
-}
+${PALETTE_GLSL}
 
 void main() {
     vec2 coord = gl_FragCoord.xy;
@@ -123,12 +127,14 @@ void main() {
     
     int iterations = 0;
     vec2 two = vec2(2.0, 0.0);
+    vec2 zx2 = vec2(0.0, 0.0);
+    vec2 zy2 = vec2(0.0, 0.0);
     
     for (int i = 0; i < u_maxIterations; ++i) {
-        vec2 zx2 = mul(zx, zx);
-        vec2 zy2 = mul(zy, zy);
+        zx2 = mul(zx, zx);
+        zy2 = mul(zy, zy);
         
-        if (add(zx2, zy2).x >= 4.0) break;
+        if (add(zx2, zy2).x >= 256.0) break;
         
         vec2 tempX = add(sub(zx2, zy2), cx);
         zy = add(mul(mul(two, zx), zy), cy);
@@ -136,13 +142,11 @@ void main() {
         iterations++;
     }
     
-    if (iterations == u_maxIterations) {
-        outColor = vec4(0.0, 0.0, 0.0, 1.0);
+    if (iterations >= u_maxIterations) {
+        outColor = vec4(interiorColor(), 1.0);
     } else {
-        // 使用常数 400.0 进行归一化，否则迭代次数变化时会导致整体色相偏移造成“闪烁/变色”
-        float t = float(iterations) / 400.0;
-        float hue = t + (160.0 / 360.0);
-        outColor = vec4(hsl2rgb(vec3(hue, 0.9, 0.6)), 1.0);
+        float smoothIterations = float(iterations) + 1.0 - log2(0.5 * log2(add(zx2, zy2).x));
+        outColor = vec4(paletteFromSmooth(smoothIterations), 1.0);
     }
 }`;
 
@@ -250,7 +254,7 @@ export class WebGLRenderer implements IFractalRenderer {
     gl.uniform2f(locZoomInv, zHi, zLo);
     
     // 保持高迭代计算，防止拖拽时因为迭代次数不足导致外围全部变黑
-    gl.uniform1i(locMaxIters, 400);
+    gl.uniform1i(locMaxIters, MAX_ITERATIONS);
     
     gl.bindVertexArray(this.vao);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
